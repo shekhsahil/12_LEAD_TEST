@@ -13,17 +13,27 @@ import serial
 # =====================================================
 # CONFIGURATION
 # =====================================================
-PORT_NAME = "COM8"  # Apna COM Port check kar lein
+PORT_NAME = "COM8"  # Apna COM Port confirm karein (e.g., COM3, COM8)
 BAUD_RATE = 115200
 SAMPLE_RATE = 250.0  # Hz
-RECORD_DURATION = 30  # Seconds per lead
+RECORD_DURATION = 30  # Total recording time in seconds per lead
+DISPLAY_SECONDS = 10.0  # Display window time on final graph (10s for clean wave)
 
-LEAD1_FILE = "lead1_data.csv"
-LEAD2_FILE = "lead2_data.csv"
-COMBINED_FILE = "all_derived_leads.csv"
+RECORDING_SEQUENCE = [
+    ("Lead I", "lead1_data.csv"),
+    ("Lead II", "lead2_data.csv"),
+    ("Lead V1", "lead_v1_data.csv"),
+    ("Lead V2", "lead_v2_data.csv"),
+    ("Lead V3", "lead_v3_data.csv"),
+    ("Lead V4", "lead_v4_data.csv"),
+    ("Lead V5", "lead_v5_data.csv"),
+    ("Lead V6", "lead_v6_data.csv"),
+]
+
+COMBINED_FILE = "all_12_leads_data.csv"
 
 # =====================================================
-# 1. DATA COLLECTION FUNCTION
+# 1. DATA COLLECTION FUNCTION (WITH SKIP OPTION)
 # =====================================================
 
 
@@ -33,12 +43,22 @@ def record_lead(lead_name, filename, duration_sec):
     )
     print(f" READY TO RECORD: {lead_name}")
     print(
-        f" Please attach electrodes for {lead_name} and press ENTER to start."
+        f" -> Press ENTER to start recording {lead_name} ({duration_sec}s)"
+    )
+    print(
+        f" -> Type 'skip' (or 's') and press ENTER to skip this lead"
     )
     print(
         f"=================================================================="
     )
-    input()
+
+    user_choice = input("Your choice: ").strip().lower()
+
+    if user_choice in ["skip", "s"]:
+        print(f"[SKIPPED] Skipped recording for {lead_name}.")
+        if os.path.exists(filename):
+            os.remove(filename)  # Cleanup old file if present
+        return False
 
     print(f"[INFO] Connecting to {PORT_NAME}...")
     try:
@@ -104,103 +124,156 @@ def record_lead(lead_name, filename, duration_sec):
 
     ser.close()
     print(f"[COMPLETE] {lead_name} saved to '{filename}' successfully!\n")
+    return True
 
 
 # =====================================================
-# 2. PROCESSING & PLOTTING FUNCTION
+# 2. DYNAMIC PLOTTING FUNCTION (10 SECONDS SCALE)
 # =====================================================
 
 
-def process_and_plot():
-    print("\n[INFO] Processing recorded CSV files...")
+def process_and_plot_available():
+    print("\n[INFO] Processing available recorded CSV files...")
 
-    df_l1 = pd.read_csv(LEAD1_FILE)
-    df_l2 = pd.read_csv(LEAD2_FILE)
+    recorded_signals = {}
 
-    df_l1.columns = df_l1.columns.str.strip()
-    df_l2.columns = df_l2.columns.str.strip()
+    for name, filename in RECORDING_SEQUENCE:
+        if os.path.exists(filename):
+            try:
+                df = pd.read_csv(filename)
+                df.columns = df.columns.str.strip()
+                col = "Filtered" if "Filtered" in df.columns else df.columns[-1]
+                data = pd.to_numeric(df[col], errors="coerce").fillna(0).values
+                if len(data) > 0:
+                    recorded_signals[name] = data
+            except Exception as e:
+                print(f"[WARNING] Could not read {filename}: {e}")
 
-    col1 = "Filtered" if "Filtered" in df_l1.columns else df_l1.columns[-1]
-    col2 = "Filtered" if "Filtered" in df_l2.columns else df_l2.columns[-1]
-
-    l1_data = pd.to_numeric(df_l1[col1], errors="coerce").fillna(0).values
-    l2_data = pd.to_numeric(df_l2[col2], errors="coerce").fillna(0).values
-
-    min_len = min(len(l1_data), len(l2_data))
-    if min_len == 0:
-        print("[ERROR] Recorded CSV files are empty!")
+    if not recorded_signals:
+        print("[ERROR] No leads were recorded! Cannot generate graph.")
         return
 
-    l1_filt = l1_data[:min_len]
-    l2_filt = l2_data[:min_len]
-
-    # Einthoven & Goldberger Equations
-    l3_filt = l2_filt - l1_filt
-    avr_filt = -(l1_filt + l2_filt) / 2.0
-    avl_filt = l1_filt - (l2_filt / 2.0)
-    avf_filt = l2_filt - (l1_filt / 2.0)
-
+    min_len = min(len(data) for data in recorded_signals.values())
     time_axis = np.arange(min_len) / SAMPLE_RATE
 
-    # Combined CSV Write
-    df_combined = pd.DataFrame({
-        "Sample": np.arange(min_len),
-        "Time_sec": time_axis,
-        "Lead_I": l1_filt,
-        "Lead_II": l2_filt,
-        "Lead_III": l3_filt,
-        "aVR": avr_filt,
-        "aVL": avl_filt,
-        "aVF": avf_filt,
-    })
+    all_plots = []
+    combined_dict = {"Sample": np.arange(min_len), "Time_sec": time_axis}
+
+    # 1. Lead I
+    if "Lead I" in recorded_signals:
+        l1 = recorded_signals["Lead I"][:min_len]
+        all_plots.append((l1, "Lead_I"))
+        combined_dict["Lead_I"] = l1
+
+    # 2. Lead II
+    if "Lead II" in recorded_signals:
+        l2 = recorded_signals["Lead II"][:min_len]
+        all_plots.append((l2, "Lead_II"))
+        combined_dict["Lead_II"] = l2
+
+    # 3. Derived Limb Leads (Calculated only if both Lead I and Lead II exist)
+    if "Lead I" in recorded_signals and "Lead II" in recorded_signals:
+        l1 = recorded_signals["Lead I"][:min_len]
+        l2 = recorded_signals["Lead II"][:min_len]
+
+        l3 = l2 - l1
+        avr = -(l1 + l2) / 2.0
+        avl = l1 - (l2 / 2.0)
+        avf = l2 - (l1 / 2.0)
+
+        all_plots.extend(
+            [(l3, "Lead_III"), (avr, "aVR"), (avl, "aVL"), (avf, "aVF")]
+        )
+        combined_dict.update({
+            "Lead_III": l3,
+            "aVR": avr,
+            "aVL": avl,
+            "aVF": avf,
+        })
+
+    # 4. Precordial Leads (V1 to V6)
+    for v_name in [
+        "Lead V1",
+        "Lead V2",
+        "Lead V3",
+        "Lead V4",
+        "Lead V5",
+        "Lead V6",
+    ]:
+        if v_name in recorded_signals:
+            v_data = recorded_signals[v_name][:min_len]
+            clean_title = v_name.replace("Lead ", "")
+            all_plots.append((v_data, clean_title))
+            combined_dict[clean_title] = v_data
+
+    # Combined Data Export
+    df_combined = pd.DataFrame(combined_dict)
     df_combined.to_csv(COMBINED_FILE, index=False)
-    print(f"[SUCCESS] Combined 6-lead dataset saved to '{COMBINED_FILE}'")
+    print(f"[SUCCESS] Recorded dataset saved to '{COMBINED_FILE}'")
 
-    # Plotting
-    print("[INFO] Rendering 6-Lead ECG Graph Window...")
-    plt.style.use("dark_background")
-    fig, axes = plt.subplots(3, 2, figsize=(14, 8), sharex=True)
-    fig.canvas.manager.set_window_title("Complete 6-Limb Lead ECG")
+    num_plots = len(all_plots)
+    print(
+        f"[INFO] Rendering graph with {num_plots} available/derived lead(s)..."
+    )
 
-    plots = [
-        (axes[0, 0], l1_filt, "Lead I (Recorded)", "#00FFCC"),
-        (axes[1, 0], l2_filt, "Lead II (Recorded)", "#00FF00"),
-        (axes[2, 0], l3_filt, "Lead III (Calculated)", "#FFFF00"),
-        (axes[0, 1], avr_filt, "aVR (Calculated)", "#FF0055"),
-        (axes[1, 1], avl_filt, "aVL (Calculated)", "#FF00FF"),
-        (axes[2, 1], avf_filt, "aVF (Calculated)", "#00CCFF"),
-    ]
+    # 3x4 Grid Layout Setup
+    cols = 4 if num_plots >= 4 else num_plots
+    rows = (num_plots + cols - 1) // cols
 
-    for ax, data, title, color in plots:
-        ax.plot(time_axis, data, color=color, linewidth=1.2)
-        ax.set_title(title, loc="left", fontsize=10, fontweight="bold")
-        ax.grid(
-            True, which="both", color="#334455", linestyle="--", linewidth=0.5
+    plt.style.use("default")
+    fig, axes = plt.subplots(rows, cols, figsize=(16, rows * 2.8))
+    fig.canvas.manager.set_window_title("12-Lead ECG Summary Report")
+    fig.suptitle(
+        "12-Lead ECG Summary Report", fontsize=16, fontweight="bold", y=0.98
+    )
+
+    if num_plots == 1:
+        axes_flat = [axes]
+    else:
+        axes_flat = axes.flatten()
+
+    for i, (data, title) in enumerate(all_plots):
+        ax = axes_flat[i]
+        ax.plot(time_axis, data, color="black", linewidth=1.1)
+        ax.set_title(
+            title, loc="left", fontsize=11, fontweight="bold", color="darkblue"
         )
 
-        d_min, d_max = np.min(data), np.max(data)
-        if d_min == d_max:
-            ax.set_ylim(-10, 10)
-        else:
-            margin = max((d_max - d_min) * 0.1, 10)
-            ax.set_ylim(d_min - margin, d_max + margin)
+        ax.set_facecolor("white")
+        ax.grid(
+            True, which="major", color="#ffb3b3", linestyle="-", linewidth=0.7
+        )
+        ax.grid(
+            True, which="minor", color="#ffe6e6", linestyle="-", linewidth=0.4
+        )
+        ax.minorticks_on()
 
-    axes[2, 0].set_xlabel("Time (seconds)")
-    axes[2, 1].set_xlabel("Time (seconds)")
+        # Fix X-axis to 10 seconds display window
+        ax.set_xlim(0, min(DISPLAY_SECONDS, time_axis[-1]))
 
-    plt.tight_layout()
+        # Auto-scale Y-axis for 10-second window
+        visible_samples = int(DISPLAY_SECONDS * SAMPLE_RATE)
+        sub_data = data[:visible_samples]
+        d_min, d_max = np.min(sub_data), np.max(sub_data)
+        margin = max((d_max - d_min) * 0.2, 20)
+        ax.set_ylim(d_min - margin, d_max + margin)
+
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+    # Hide unused grid boxes
+    for j in range(num_plots, len(axes_flat)):
+        fig.delaxes(axes_flat[j])
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show(block=True)
 
 
 # =====================================================
-# MAIN EXECUTION
+# MAIN PIPELINE
 # =====================================================
 if __name__ == "__main__":
-    # Step 1: Record Lead 1
-    record_lead("Lead I", LEAD1_FILE, RECORD_DURATION)
+    for lead_label, file_path in RECORDING_SEQUENCE:
+        record_lead(lead_label, file_path, RECORD_DURATION)
 
-    # Step 2: Record Lead 2
-    record_lead("Lead II", LEAD2_FILE, RECORD_DURATION)
-
-    # Step 3: Automatically Calculate Derived Leads and Plot
-    process_and_plot()
+    process_and_plot_available()
