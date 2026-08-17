@@ -9,15 +9,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import serial
+from scipy.signal import find_peaks
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
-PORT_NAME = "COM8"  # Apna COM Port confirm karein (e.g., COM3, COM8)
+PORT_NAME = "COM8"  # Confirm your COM Port
 BAUD_RATE = 115200
 SAMPLE_RATE = 250.0  # Hz
-RECORD_DURATION = 30  # Total recording time in seconds per lead
-DISPLAY_SECONDS = 10.0  # Display window time on final graph (10s for clean wave)
+RECORD_DURATION = 10  # 10 Seconds Recording per lead
+TARGET_BEATS = 5  # Show exactly 5 beats in display window
 
 RECORDING_SEQUENCE = [
     ("Lead I", "lead1_data.csv"),
@@ -33,7 +34,7 @@ RECORDING_SEQUENCE = [
 COMBINED_FILE = "all_12_leads_data.csv"
 
 # =====================================================
-# 1. DATA COLLECTION FUNCTION (WITH SKIP OPTION)
+# 1. DATA COLLECTION FUNCTION
 # =====================================================
 
 
@@ -57,7 +58,7 @@ def record_lead(lead_name, filename, duration_sec):
     if user_choice in ["skip", "s"]:
         print(f"[SKIPPED] Skipped recording for {lead_name}.")
         if os.path.exists(filename):
-            os.remove(filename)  # Cleanup old file if present
+            os.remove(filename)
         return False
 
     print(f"[INFO] Connecting to {PORT_NAME}...")
@@ -128,7 +129,7 @@ def record_lead(lead_name, filename, duration_sec):
 
 
 # =====================================================
-# 2. DYNAMIC PLOTTING FUNCTION (10 SECONDS SCALE)
+# 2. BEAT-BASED PLOTTING FUNCTION (5 BEATS SCALE)
 # =====================================================
 
 
@@ -171,7 +172,7 @@ def process_and_plot_available():
         all_plots.append((l2, "Lead_II"))
         combined_dict["Lead_II"] = l2
 
-    # 3. Derived Limb Leads (Calculated only if both Lead I and Lead II exist)
+    # 3. Derived Limb Leads
     if "Lead I" in recorded_signals and "Lead II" in recorded_signals:
         l1 = recorded_signals["Lead I"][:min_len]
         l2 = recorded_signals["Lead II"][:min_len]
@@ -191,7 +192,7 @@ def process_and_plot_available():
             "aVF": avf,
         })
 
-    # 4. Precordial Leads (V1 to V6)
+    # 4. Precordial Leads
     for v_name in [
         "Lead V1",
         "Lead V2",
@@ -206,25 +207,22 @@ def process_and_plot_available():
             all_plots.append((v_data, clean_title))
             combined_dict[clean_title] = v_data
 
-    # Combined Data Export
+    # Export to Combined File
     df_combined = pd.DataFrame(combined_dict)
     df_combined.to_csv(COMBINED_FILE, index=False)
     print(f"[SUCCESS] Recorded dataset saved to '{COMBINED_FILE}'")
 
     num_plots = len(all_plots)
-    print(
-        f"[INFO] Rendering graph with {num_plots} available/derived lead(s)..."
-    )
 
-    # 3x4 Grid Layout Setup
+    # 3x4 Layout Setup
     cols = 4 if num_plots >= 4 else num_plots
     rows = (num_plots + cols - 1) // cols
 
     plt.style.use("default")
-    fig, axes = plt.subplots(rows, cols, figsize=(16, rows * 2.8))
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 9))
     fig.canvas.manager.set_window_title("12-Lead ECG Summary Report")
     fig.suptitle(
-        "12-Lead ECG Summary Report", fontsize=16, fontweight="bold", y=0.98
+        "12-Lead ECG Summary Report", fontsize=18, fontweight="bold", y=0.96
     )
 
     if num_plots == 1:
@@ -234,11 +232,14 @@ def process_and_plot_available():
 
     for i, (data, title) in enumerate(all_plots):
         ax = axes_flat[i]
+
+        # Plot ECG Line
         ax.plot(time_axis, data, color="black", linewidth=1.1)
         ax.set_title(
             title, loc="left", fontsize=11, fontweight="bold", color="darkblue"
         )
 
+        # Medical Grid Background
         ax.set_facecolor("white")
         ax.grid(
             True, which="major", color="#ffb3b3", linestyle="-", linewidth=0.7
@@ -248,24 +249,46 @@ def process_and_plot_available():
         )
         ax.minorticks_on()
 
-        # Fix X-axis to 10 seconds display window
-        ax.set_xlim(0, min(DISPLAY_SECONDS, time_axis[-1]))
+        # Dynamic 5-Beat Peak Detection Logic
+        peaks, _ = find_peaks(
+            data,
+            distance=int(SAMPLE_RATE * 0.4),
+            prominence=np.std(data) * 0.6,
+        )
 
-        # Auto-scale Y-axis for 10-second window
-        visible_samples = int(DISPLAY_SECONDS * SAMPLE_RATE)
-        sub_data = data[:visible_samples]
-        d_min, d_max = np.min(sub_data), np.max(sub_data)
-        margin = max((d_max - d_min) * 0.2, 20)
-        ax.set_ylim(d_min - margin, d_max + margin)
+        if len(peaks) >= TARGET_BEATS:
+            # First peak se thoda pehle (0.2s) Start, aur 5th peak ke thoda baad (0.3s) End
+            start_idx = max(0, int(peaks[0] - SAMPLE_RATE * 0.2))
+            end_idx = min(
+                len(data) - 1, int(peaks[TARGET_BEATS - 1] + SAMPLE_RATE * 0.3)
+            )
+
+            x_min = time_axis[start_idx]
+            x_max = time_axis[end_idx]
+            sub_data = data[start_idx:end_idx]
+        else:
+            # Fallback agar peaks na milein (default 4 seconds view)
+            x_min = 0.0
+            x_max = min(4.0, time_axis[-1])
+            sub_data = data[: int(x_max * SAMPLE_RATE)]
+
+        # Set X-Axis to exact 5 Beats
+        ax.set_xlim(x_min, x_max)
+
+        # Auto Y-Axis Scaling for the 5-beat window
+        if len(sub_data) > 0:
+            d_min, d_max = np.min(sub_data), np.max(sub_data)
+            margin = max((d_max - d_min) * 0.15, 15)
+            ax.set_ylim(d_min - margin, d_max + margin)
 
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-    # Hide unused grid boxes
+    # Hide unused subplots
     for j in range(num_plots, len(axes_flat)):
         fig.delaxes(axes_flat[j])
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
     plt.show(block=True)
 
 
