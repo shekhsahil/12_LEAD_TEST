@@ -1,0 +1,53 @@
+/*
+  ESP32 ECG Data Transmitter for 6-Lead Python Pipeline
+  Baud Rate: 115200
+  Sampling Rate: 250 Hz (4ms interval)
+*/
+
+#define ECG_PIN   34
+#define LO_PLUS   33
+#define LO_MINUS  32
+
+// Sampling & Filter Variables
+unsigned long lastSampleTime = 0;
+const unsigned long SAMPLE_INTERVAL_US = 4000; // 4000 microseconds = 250 Hz
+
+// Exponential Moving Average (EMA) Filter Variables
+float filteredVal = 0.0;
+const float ALPHA = 0.15; // Filter smoothing factor
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(ECG_PIN, INPUT);
+  pinMode(LO_PLUS, INPUT);
+  pinMode(LO_MINUS, INPUT);
+
+  delay(1000);
+}
+
+void loop() {
+  unsigned long currentTime = micros();
+
+  if (currentTime - lastSampleTime >= SAMPLE_INTERVAL_US) {
+    lastSampleTime = currentTime;
+
+    // Check if Electrodes are disconnected
+    if (digitalRead(LO_PLUS) == HIGH || digitalRead(LO_MINUS) == HIGH) {
+      Serial.println("0.0,0.0");
+    } else {
+      int rawADC = analogRead(ECG_PIN);
+
+      if (filteredVal == 0.0) {
+        filteredVal = rawADC;
+      } else {
+        filteredVal = (ALPHA * rawADC) + ((1.0 - ALPHA) * filteredVal);
+      }
+
+      // Output format: "Raw,Filtered"
+      Serial.print(rawADC);
+      Serial.print(",");
+      Serial.println(filteredVal, 2);
+    }
+  }
+}
