@@ -1,0 +1,781 @@
+import processing.serial.*;
+
+Serial myPort;
+
+// =====================================================
+// SERIAL SETTINGS
+// =====================================================
+
+String portName = "COM8";
+int baudRate = 115200;
+
+
+// =====================================================
+// ECG DATA
+// =====================================================
+
+int bufferSize = 1000;       // 4 seconds at 250 Hz
+
+float[] rawData;
+float[] filteredData;
+
+int dataIndex = 0;
+
+
+// =====================================================
+// GRAPH SETTINGS
+// =====================================================
+
+int graphX = 50;
+
+int topGraphY = 90;
+int bottomGraphY;
+
+int graphWidth;
+int graphHeight;
+
+
+// =====================================================
+// RAW GRAPH SCALE
+// =====================================================
+
+float rawDisplayMin = 1800;
+float rawDisplayMax = 2300;
+
+float rawScaleSmooth = 0.05;
+
+
+// =====================================================
+// FILTERED GRAPH SCALE
+// =====================================================
+
+float filteredDisplayMin = 1800;
+float filteredDisplayMax = 2300;
+
+float filteredScaleSmooth = 0.05;
+
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+
+  size(1000, 650);
+
+  rawData = new float[bufferSize];
+  filteredData = new float[bufferSize];
+
+
+  // Initialize buffers
+
+  for (int i = 0; i < bufferSize; i++) {
+
+    rawData[i] = 2048;
+    filteredData[i] = 2048;
+  }
+
+
+  println("Available Serial Ports:");
+  println(Serial.list());
+
+
+  // Open ESP32 serial port
+
+  myPort = new Serial(
+    this,
+    portName,
+    baudRate
+  );
+
+  myPort.clear();
+
+  myPort.bufferUntil('\n');
+
+
+  updateGraphSize();
+}
+
+
+// =====================================================
+// DRAW
+// =====================================================
+
+void draw() {
+
+  background(15);
+
+
+  // ===================================================
+  // AUTOMATIC GRAPH SIZE
+  // ===================================================
+
+  updateGraphSize();
+
+
+  // ===================================================
+  // TITLE
+  // ===================================================
+
+  fill(255);
+
+  textSize(22);
+
+  text(
+    "ESP32 ECG Monitor",
+    30,
+    32
+  );
+
+
+  fill(170);
+
+  textSize(12);
+
+  text(
+    "RAW + FILTERED ECG  |  Sampling Rate: 250 Hz",
+    30,
+    55
+  );
+
+
+  // ===================================================
+  // AUTOMATIC SCALING
+  // ===================================================
+
+  updateRawScale();
+
+  updateFilteredScale();
+
+
+  // ===================================================
+  // RAW GRAPH
+  // ===================================================
+
+  drawRawGrid();
+
+  drawRawWaveform();
+
+
+  // ===================================================
+  // FILTERED GRAPH
+  // ===================================================
+
+  drawFilteredGrid();
+
+  drawFilteredWaveform();
+
+
+  // ===================================================
+  // INFORMATION
+  // ===================================================
+
+  drawInformation();
+}
+
+
+// =====================================================
+// AUTOMATIC GRAPH SIZE
+// =====================================================
+
+void updateGraphSize() {
+
+  graphWidth = width - 100;
+
+  // Space for two graphs
+
+  graphHeight =
+    (height - 190) / 2;
+
+
+  // Minimum graph height
+
+  graphHeight =
+    max(graphHeight, 150);
+
+
+  bottomGraphY =
+    topGraphY +
+    graphHeight +
+    70;
+}
+
+
+// =====================================================
+// SERIAL EVENT
+// =====================================================
+
+void serialEvent(Serial p) {
+
+  String incoming =
+    p.readStringUntil('\n');
+
+
+  if (incoming == null) {
+    return;
+  }
+
+
+  incoming =
+    trim(incoming);
+
+
+  // ===================================================
+  // RAW DATA
+  // ===================================================
+
+  if (incoming.startsWith(">raw:")) {
+
+    String value =
+      incoming.substring(5);
+
+
+    try {
+
+      float raw =
+        float(value);
+
+
+      rawData[dataIndex] =
+        raw;
+
+    }
+    catch (Exception e) {
+
+      println(
+        "RAW data error: " +
+        incoming
+      );
+    }
+  }
+
+
+  // ===================================================
+  // FILTERED DATA
+  // ===================================================
+
+  else if (incoming.startsWith(">filtered:")) {
+
+    String value =
+      incoming.substring(10);
+
+
+    try {
+
+      float filtered =
+        float(value);
+
+
+      filteredData[dataIndex] =
+        filtered;
+
+
+      // Advance index ONLY after
+      // receiving filtered value
+
+      dataIndex++;
+
+
+      if (dataIndex >= bufferSize) {
+
+        dataIndex = 0;
+      }
+
+    }
+    catch (Exception e) {
+
+      println(
+        "Filtered data error: " +
+        incoming
+      );
+    }
+  }
+}
+
+
+// =====================================================
+// RAW AUTOMATIC SCALE
+// =====================================================
+
+void updateRawScale() {
+
+  float minValue = 999999;
+
+  float maxValue = -999999;
+
+
+  for (int i = 0; i < bufferSize; i++) {
+
+    float value =
+      rawData[i];
+
+
+    if (value < minValue) {
+      minValue = value;
+    }
+
+
+    if (value > maxValue) {
+      maxValue = value;
+    }
+  }
+
+
+  if (maxValue - minValue < 5) {
+    return;
+  }
+
+
+  float range =
+    maxValue - minValue;
+
+
+  float margin =
+    range * 0.20;
+
+
+  float targetMin =
+    minValue - margin;
+
+
+  float targetMax =
+    maxValue + margin;
+
+
+  targetMin =
+    constrain(
+      targetMin,
+      0,
+      4095
+    );
+
+
+  targetMax =
+    constrain(
+      targetMax,
+      0,
+      4095
+    );
+
+
+  rawDisplayMin =
+    lerp(
+      rawDisplayMin,
+      targetMin,
+      rawScaleSmooth
+    );
+
+
+  rawDisplayMax =
+    lerp(
+      rawDisplayMax,
+      targetMax,
+      rawScaleSmooth
+    );
+}
+
+
+// =====================================================
+// FILTERED AUTOMATIC SCALE
+// =====================================================
+
+void updateFilteredScale() {
+
+  float minValue = 999999;
+
+  float maxValue = -999999;
+
+
+  for (int i = 0; i < bufferSize; i++) {
+
+    float value =
+      filteredData[i];
+
+
+    if (value < minValue) {
+      minValue = value;
+    }
+
+
+    if (value > maxValue) {
+      maxValue = value;
+    }
+  }
+
+
+  if (maxValue - minValue < 5) {
+    return;
+  }
+
+
+  float range =
+    maxValue - minValue;
+
+
+  float margin =
+    range * 0.25;
+
+
+  float targetMin =
+    minValue - margin;
+
+
+  float targetMax =
+    maxValue + margin;
+
+
+  filteredDisplayMin =
+    lerp(
+      filteredDisplayMin,
+      targetMin,
+      filteredScaleSmooth
+    );
+
+
+  filteredDisplayMax =
+    lerp(
+      filteredDisplayMax,
+      targetMax,
+      filteredScaleSmooth
+    );
+}
+
+
+// =====================================================
+// RAW GRID
+// =====================================================
+
+void drawRawGrid() {
+
+  fill(10);
+
+  stroke(70);
+
+  strokeWeight(1);
+
+
+  rect(
+    graphX,
+    topGraphY,
+    graphWidth,
+    graphHeight
+  );
+
+
+  // Vertical grid
+
+  stroke(35);
+
+  for (
+    int x = graphX;
+    x <= graphX + graphWidth;
+    x += 40
+  ) {
+
+    line(
+      x,
+      topGraphY,
+      x,
+      topGraphY + graphHeight
+    );
+  }
+
+
+  // Horizontal grid
+
+  for (
+    int y = topGraphY;
+    y <= topGraphY + graphHeight;
+    y += 30
+  ) {
+
+    line(
+      graphX,
+      y,
+      graphX + graphWidth,
+      y
+    );
+  }
+
+
+  // Border
+
+  stroke(90);
+
+  noFill();
+
+  rect(
+    graphX,
+    topGraphY,
+    graphWidth,
+    graphHeight
+  );
+
+
+  // Label
+
+  fill(220);
+
+  textSize(14);
+
+  text(
+    "RAW ECG",
+    graphX + 10,
+    topGraphY + 22
+  );
+}
+
+
+// =====================================================
+// FILTERED GRID
+// =====================================================
+
+void drawFilteredGrid() {
+
+  fill(10);
+
+  stroke(70);
+
+  strokeWeight(1);
+
+
+  rect(
+    graphX,
+    bottomGraphY,
+    graphWidth,
+    graphHeight
+  );
+
+
+  // Vertical grid
+
+  stroke(35);
+
+  for (
+    int x = graphX;
+    x <= graphX + graphWidth;
+    x += 40
+  ) {
+
+    line(
+      x,
+      bottomGraphY,
+      x,
+      bottomGraphY + graphHeight
+    );
+  }
+
+
+  // Horizontal grid
+
+  for (
+    int y = bottomGraphY;
+    y <= bottomGraphY + graphHeight;
+    y += 30
+  ) {
+
+    line(
+      graphX,
+      y,
+      graphX + graphWidth,
+      y
+    );
+  }
+
+
+  // Border
+
+  stroke(90);
+
+  noFill();
+
+  rect(
+    graphX,
+    bottomGraphY,
+    graphWidth,
+    graphHeight
+  );
+
+
+  // Label
+
+  fill(220);
+
+  textSize(14);
+
+  text(
+    "FILTERED ECG",
+    graphX + 10,
+    bottomGraphY + 22
+  );
+}
+
+
+// =====================================================
+// RAW WAVEFORM
+// =====================================================
+
+void drawRawWaveform() {
+
+  stroke(255, 180, 50);
+
+  strokeWeight(1.5);
+
+  noFill();
+
+
+  beginShape();
+
+
+  for (int i = 0; i < bufferSize; i++) {
+
+    int index =
+      (dataIndex + i) % bufferSize;
+
+
+    float value =
+      rawData[index];
+
+
+    float y =
+      map(
+        value,
+        rawDisplayMin,
+        rawDisplayMax,
+        topGraphY + graphHeight - 8,
+        topGraphY + 8
+      );
+
+
+    y =
+      constrain(
+        y,
+        topGraphY + 5,
+        topGraphY + graphHeight - 5
+      );
+
+
+    float x =
+      map(
+        i,
+        0,
+        bufferSize - 1,
+        graphX,
+        graphX + graphWidth
+      );
+
+
+    vertex(x, y);
+  }
+
+
+  endShape();
+}
+
+
+// =====================================================
+// FILTERED WAVEFORM
+// =====================================================
+
+void drawFilteredWaveform() {
+
+  stroke(0, 255, 120);
+
+  strokeWeight(2.0);
+
+  noFill();
+
+
+  beginShape();
+
+
+  for (int i = 0; i < bufferSize; i++) {
+
+    int index =
+      (dataIndex + i) % bufferSize;
+
+
+    float value =
+      filteredData[index];
+
+
+    float y =
+      map(
+        value,
+        filteredDisplayMin,
+        filteredDisplayMax,
+        bottomGraphY + graphHeight - 8,
+        bottomGraphY + 8
+      );
+
+
+    y =
+      constrain(
+        y,
+        bottomGraphY + 5,
+        bottomGraphY + graphHeight - 5
+      );
+
+
+    float x =
+      map(
+        i,
+        0,
+        bufferSize - 1,
+        graphX,
+        graphX + graphWidth
+      );
+
+
+    vertex(x, y);
+  }
+
+
+  endShape();
+}
+
+
+// =====================================================
+// INFORMATION
+// =====================================================
+
+void drawInformation() {
+
+  int infoY =
+    bottomGraphY + graphHeight + 28;
+
+
+  fill(160);
+
+  textSize(12);
+
+
+  text(
+    "Time: " +
+    nf(bufferSize / 250.0, 1, 1) +
+    " sec",
+    graphX,
+    infoY
+  );
+
+
+  text(
+    "Sampling: 250 Hz",
+    graphX + 160,
+    infoY
+  );
+
+
+  text(
+    "RAW = ADC",
+    graphX + 330,
+    infoY
+  );
+
+
+  text(
+    "FILTERED = LP + 50 Hz Notch",
+    graphX + 470,
+    infoY
+  );
+}
