@@ -1,20 +1,31 @@
+import processing.core.PConstants;
 import processing.serial.*;
+import java.util.ArrayList;
 
-Serial myPort;
 
 // =====================================================
 // SERIAL SETTINGS
 // =====================================================
+
+Serial myPort;
 
 String portName = "COM8";
 int baudRate = 115200;
 
 
 // =====================================================
-// ECG DATA
+// ECG SETTINGS
 // =====================================================
 
-int bufferSize = 1000;       // 4 seconds at 250 Hz
+final float SAMPLE_RATE = 250.0;
+final float SAMPLE_INTERVAL_MS = 4.0;
+
+final int BUFFER_SIZE = 1000;   // 4 seconds at 250 Hz
+
+
+// =====================================================
+// ECG DATA
+// =====================================================
 
 float[] rawData;
 float[] filteredData;
@@ -23,36 +34,121 @@ int dataIndex = 0;
 
 
 // =====================================================
-// GRAPH SETTINGS
+// FONTS
 // =====================================================
 
-int graphX = 50;
+PFont titleFont;
+PFont boldFont;
+PFont normalFont;
+PFont smallFont;
 
-int topGraphY = 90;
-int bottomGraphY;
 
+// =====================================================
+// SIGNAL / RECORDING TIMER
+// =====================================================
+
+boolean signalConnected = false;
+boolean signalRecording = false;
+boolean firstSignalReceived = false;
+
+float accumulatedRecordingSeconds = 0;
+float totalRecordingSeconds = 0;
+
+long connectionStartMillis = 0;
+
+
+// =====================================================
+// LEAD SELECTION
+// =====================================================
+
+String[] leads = {
+  "Lead I",
+  "Lead II",
+  "Lead III",
+  "aVR",
+  "aVL",
+  "aVF",
+  "V1",
+  "V2",
+  "V3",
+  "V4",
+  "V5",
+  "V6"
+};
+
+int selectedLead = 1;
+
+
+// =====================================================
+// GRAPH LAYOUT
+// =====================================================
+
+int graphX;
 int graphWidth;
+
+int rawGraphY;
+int filteredGraphY;
+
 int graphHeight;
 
 
 // =====================================================
-// RAW GRAPH SCALE
+// AUTOMATIC SCALING
 // =====================================================
 
-float rawDisplayMin = 1800;
-float rawDisplayMax = 2300;
+float rawMin = 1800;
+float rawMax = 2300;
 
-float rawScaleSmooth = 0.05;
+float filteredMin = 1800;
+float filteredMax = 2300;
+
+float scaleSmooth = 0.05;
 
 
 // =====================================================
-// FILTERED GRAPH SCALE
+// ECG PARAMETERS
 // =====================================================
 
-float filteredDisplayMin = 1800;
-float filteredDisplayMax = 2300;
+float heartRate = 0;
+float rrInterval = 0;
+float prInterval = 0;
+float qrsDuration = 0;
+float qtInterval = 0;
+float qtcInterval = 0;
 
-float filteredScaleSmooth = 0.05;
+boolean measurementsReady = false;
+
+int measurementCounter = 0;
+
+
+// =====================================================
+// COLORS
+// =====================================================
+
+int BG;
+int PANEL;
+
+int TEXT;
+int SUBTEXT;
+
+int GRID_MINOR;
+int GRID_MAJOR;
+
+int RAW_COLOR;
+int FILTER_COLOR;
+
+int ACCENT;
+int WARNING;
+
+int BPM_COLOR;
+int RR_COLOR;
+int PR_COLOR;
+int QRS_COLOR;
+int QT_COLOR;
+int QTC_COLOR;
+
+int BUTTON_COLOR;
+int BUTTON_ACTIVE;
 
 
 // =====================================================
@@ -61,39 +157,254 @@ float filteredScaleSmooth = 0.05;
 
 void setup() {
 
-  size(1000, 650);
+  size(1200, 820);
 
-  rawData = new float[bufferSize];
-  filteredData = new float[bufferSize];
+  surface.setTitle(
+    "ESP32 ECG Monitor"
+  );
 
 
-  // Initialize buffers
+  // ===================================================
+  // FONTS
+  // ===================================================
 
-  for (int i = 0; i < bufferSize; i++) {
+  titleFont =
+    createFont(
+      "Arial",
+      27
+    );
+
+  boldFont =
+    createFont(
+      "Arial Bold",
+      16
+    );
+
+  normalFont =
+    createFont(
+      "Arial",
+      14
+    );
+
+  smallFont =
+    createFont(
+      "Arial",
+      11
+    );
+
+
+  // ===================================================
+  // COLORS
+  // ===================================================
+
+  BG =
+    color(
+      8,
+      12,
+      18
+    );
+
+  PANEL =
+    color(
+      17,
+      23,
+      31
+    );
+
+  TEXT =
+    color(
+      245,
+      248,
+      252
+    );
+
+  SUBTEXT =
+    color(
+      150,
+      165,
+      180
+    );
+
+  GRID_MINOR =
+    color(
+      32,
+      42,
+      52
+    );
+
+  GRID_MAJOR =
+    color(
+      60,
+      75,
+      88
+    );
+
+  RAW_COLOR =
+    color(
+      255,
+      185,
+      60
+    );
+
+  FILTER_COLOR =
+    color(
+      40,
+      240,
+      145
+    );
+
+  ACCENT =
+    color(
+      70,
+      170,
+      255
+    );
+
+  WARNING =
+    color(
+      255,
+      70,
+      70
+    );
+
+
+  // ===================================================
+  // PARAMETER COLORS
+  // ===================================================
+
+  BPM_COLOR =
+    color(
+      255,
+      80,
+      90
+    );
+
+  RR_COLOR =
+    color(
+      80,
+      180,
+      255
+    );
+
+  PR_COLOR =
+    color(
+      190,
+      100,
+      255
+    );
+
+  QRS_COLOR =
+    color(
+      255,
+      180,
+      60
+    );
+
+  QT_COLOR =
+    color(
+      50,
+      230,
+      150
+    );
+
+  QTC_COLOR =
+    color(
+      255,
+      100,
+      210
+    );
+
+
+  BUTTON_COLOR =
+    color(
+      35,
+      45,
+      58
+    );
+
+  BUTTON_ACTIVE =
+    color(
+      50,
+      110,
+      170
+    );
+
+
+  // ===================================================
+  // DATA ARRAYS
+  // ===================================================
+
+  rawData =
+    new float[
+      BUFFER_SIZE
+    ];
+
+  filteredData =
+    new float[
+      BUFFER_SIZE
+    ];
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
 
     rawData[i] = 2048;
     filteredData[i] = 2048;
   }
 
 
-  println("Available Serial Ports:");
-  println(Serial.list());
+  // ===================================================
+  // SERIAL PORT
+  // ===================================================
 
-
-  // Open ESP32 serial port
-
-  myPort = new Serial(
-    this,
-    portName,
-    baudRate
+  println(
+    "Available Serial Ports:"
   );
 
-  myPort.clear();
+  println(
+    Serial.list()
+  );
 
-  myPort.bufferUntil('\n');
+
+  try {
+
+    myPort =
+      new Serial(
+        this,
+        portName,
+        baudRate
+      );
+
+    myPort.clear();
+
+    myPort.bufferUntil('\n');
+
+    signalConnected = false;
+    signalRecording = false;
+
+    println(
+      "Serial connected: " +
+      portName
+    );
+
+  }
+  catch(Exception e) {
+
+    signalConnected = false;
+    signalRecording = false;
+
+    println(
+      "Serial connection error:"
+    );
+
+    println(e);
+  }
 
 
-  updateGraphSize();
+  updateLayout();
 }
 
 
@@ -103,101 +414,736 @@ void setup() {
 
 void draw() {
 
-  background(15);
+  background(BG);
 
+  updateLayout();
 
-  // ===================================================
-  // AUTOMATIC GRAPH SIZE
-  // ===================================================
-
-  updateGraphSize();
-
-
-  // ===================================================
-  // TITLE
-  // ===================================================
-
-  fill(255);
-
-  textSize(22);
-
-  text(
-    "ESP32 ECG Monitor",
-    30,
-    32
-  );
-
-
-  fill(170);
-
-  textSize(12);
-
-  text(
-    "RAW + FILTERED ECG  |  Sampling Rate: 250 Hz",
-    30,
-    55
-  );
-
-
-  // ===================================================
-  // AUTOMATIC SCALING
-  // ===================================================
+  updateRecordingTimer();
 
   updateRawScale();
 
   updateFilteredScale();
 
 
-  // ===================================================
-  // RAW GRAPH
-  // ===================================================
+  if (signalRecording) {
 
-  drawRawGrid();
-
-  drawRawWaveform();
+    updateECGMeasurements();
+  }
 
 
-  // ===================================================
-  // FILTERED GRAPH
-  // ===================================================
+  drawHeader();
 
-  drawFilteredGrid();
+  drawRawGraph();
 
-  drawFilteredWaveform();
+  drawFilteredGraph();
 
+  drawControls();
 
-  // ===================================================
-  // INFORMATION
-  // ===================================================
-
-  drawInformation();
+  drawMeasurements();
 }
 
 
 // =====================================================
-// AUTOMATIC GRAPH SIZE
+// LAYOUT
 // =====================================================
 
-void updateGraphSize() {
+void updateLayout() {
 
-  graphWidth = width - 100;
+  graphX = 70;
 
-  // Space for two graphs
+  graphWidth =
+    width - 140;
 
-  graphHeight =
-    (height - 190) / 2;
+  graphHeight = 245;
 
+  rawGraphY = 105;
 
-  // Minimum graph height
-
-  graphHeight =
-    max(graphHeight, 150);
-
-
-  bottomGraphY =
-    topGraphY +
+  filteredGraphY =
+    rawGraphY +
     graphHeight +
-    70;
+    80;
+}
+
+
+// =====================================================
+// HEADER
+// =====================================================
+
+void drawHeader() {
+
+  textAlign(PConstants.LEFT);
+
+  textFont(titleFont);
+
+  fill(TEXT);
+
+  text(
+    "ESP32 ECG MONITOR",
+    35,
+    35
+  );
+
+
+  textFont(smallFont);
+
+  fill(SUBTEXT);
+
+  text(
+    "AD8232  |  250 Hz  |  4 ms/sample  |  4-second waveform window",
+    37,
+    58
+  );
+
+
+  // ===================================================
+  // CONNECTION STATUS
+  // ===================================================
+
+  if (signalRecording) {
+
+    fill(FILTER_COLOR);
+
+    ellipse(
+      width - 175,
+      28,
+      10,
+      10
+    );
+
+    textFont(boldFont);
+
+    fill(TEXT);
+
+    text(
+      "RECORDING",
+      width - 155,
+      34
+    );
+
+  }
+  else {
+
+    fill(WARNING);
+
+    ellipse(
+      width - 175,
+      28,
+      10,
+      10
+    );
+
+    textFont(boldFont);
+
+    fill(TEXT);
+
+    text(
+      "NO SIGNAL",
+      width - 155,
+      34
+    );
+  }
+}
+
+
+// =====================================================
+// RAW GRAPH
+// =====================================================
+
+void drawRawGraph() {
+
+  drawGraphPanel(
+    rawGraphY,
+    "RAW ECG",
+    RAW_COLOR
+  );
+
+  drawTimeAxis(
+    rawGraphY
+  );
+
+  drawRawWaveform();
+}
+
+
+// =====================================================
+// FILTERED GRAPH
+// =====================================================
+
+void drawFilteredGraph() {
+
+  drawGraphPanel(
+    filteredGraphY,
+    "FILTERED ECG",
+    FILTER_COLOR
+  );
+
+  drawTimeAxis(
+    filteredGraphY
+  );
+
+  drawFilteredWaveform();
+}
+
+
+// =====================================================
+// GRAPH PANEL
+// =====================================================
+
+void drawGraphPanel(
+  int y,
+  String title,
+  int waveColor
+) {
+
+  fill(PANEL);
+
+  stroke(70);
+
+  strokeWeight(1);
+
+  rect(
+    graphX,
+    y,
+    graphWidth,
+    graphHeight,
+    5
+  );
+
+
+  drawECGGrid(y);
+
+
+  textFont(boldFont);
+
+  fill(waveColor);
+
+  text(
+    title,
+    graphX + 12,
+    y + 22
+  );
+
+
+  textFont(smallFont);
+
+  fill(SUBTEXT);
+
+  text(
+    "AUTO SCALE",
+    graphX +
+    graphWidth -
+    90,
+    y + 18
+  );
+}
+
+
+// =====================================================
+// ECG GRID
+// =====================================================
+
+void drawECGGrid(
+  int y
+) {
+
+  float totalTime =
+    BUFFER_SIZE /
+    SAMPLE_RATE;
+
+
+  stroke(GRID_MINOR);
+
+  strokeWeight(1);
+
+
+  for (
+    float t = 0;
+    t <= totalTime;
+    t += 0.2
+  ) {
+
+    float x =
+      map(
+        t,
+        0,
+        totalTime,
+        graphX,
+        graphX +
+        graphWidth
+      );
+
+    line(
+      x,
+      y,
+      x,
+      y +
+      graphHeight
+    );
+  }
+
+
+  stroke(GRID_MAJOR);
+
+
+  for (
+    float t = 0;
+    t <= totalTime;
+    t += 0.5
+  ) {
+
+    float x =
+      map(
+        t,
+        0,
+        totalTime,
+        graphX,
+        graphX +
+        graphWidth
+      );
+
+    line(
+      x,
+      y,
+      x,
+      y +
+      graphHeight
+    );
+  }
+
+
+  stroke(GRID_MINOR);
+
+
+  for (
+    int yy = y;
+    yy <= y +
+      graphHeight;
+    yy += 25
+  ) {
+
+    line(
+      graphX,
+      yy,
+      graphX +
+      graphWidth,
+      yy
+    );
+  }
+
+
+  stroke(GRID_MAJOR);
+
+  line(
+    graphX,
+    y +
+    graphHeight / 2,
+    graphX +
+    graphWidth,
+    y +
+    graphHeight / 2
+  );
+}
+
+
+// =====================================================
+// TIME AXIS
+// =====================================================
+
+void drawTimeAxis(
+  int y
+) {
+
+  float totalTime =
+    BUFFER_SIZE /
+    SAMPLE_RATE;
+
+
+  textFont(smallFont);
+
+  fill(SUBTEXT);
+
+  textAlign(
+    PConstants.CENTER
+  );
+
+
+  for (
+    float t = 0;
+    t <= totalTime + 0.001;
+    t += 0.5
+  ) {
+
+    float x =
+      map(
+        t,
+        0,
+        totalTime,
+        graphX,
+        graphX +
+        graphWidth
+      );
+
+
+    stroke(SUBTEXT);
+
+    line(
+      x,
+      y +
+      graphHeight,
+
+      x,
+      y +
+      graphHeight +
+      6
+    );
+
+
+    text(
+      nf(
+        t,
+        1,
+        1
+      ) +
+      " s",
+
+      x,
+
+      y +
+      graphHeight +
+      18
+    );
+  }
+
+
+  textAlign(
+    PConstants.LEFT
+  );
+}
+
+
+// =====================================================
+// RAW WAVEFORM
+// =====================================================
+
+void drawRawWaveform() {
+
+  stroke(RAW_COLOR);
+
+  strokeWeight(1.5);
+
+  noFill();
+
+  beginShape();
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
+
+    int index =
+      (
+        dataIndex +
+        i
+      )
+      %
+      BUFFER_SIZE;
+
+
+    float value =
+      rawData[index];
+
+
+    float y =
+      map(
+        value,
+        rawMin,
+        rawMax,
+
+        rawGraphY +
+        graphHeight -
+        8,
+
+        rawGraphY +
+        8
+      );
+
+
+    y =
+      constrain(
+        y,
+        rawGraphY + 5,
+
+        rawGraphY +
+        graphHeight -
+        5
+      );
+
+
+    float x =
+      map(
+        i,
+        0,
+        BUFFER_SIZE - 1,
+
+        graphX,
+        graphX +
+        graphWidth
+      );
+
+
+    vertex(
+      x,
+      y
+    );
+  }
+
+
+  endShape();
+}
+
+
+// =====================================================
+// FILTERED WAVEFORM
+// =====================================================
+
+void drawFilteredWaveform() {
+
+  stroke(FILTER_COLOR);
+
+  strokeWeight(2.2);
+
+  noFill();
+
+  beginShape();
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
+
+    int index =
+      (
+        dataIndex +
+        i
+      )
+      %
+      BUFFER_SIZE;
+
+
+    float value =
+      filteredData[index];
+
+
+    float y =
+      map(
+        value,
+        filteredMin,
+        filteredMax,
+
+        filteredGraphY +
+        graphHeight -
+        8,
+
+        filteredGraphY +
+        8
+      );
+
+
+    y =
+      constrain(
+        y,
+        filteredGraphY + 5,
+
+        filteredGraphY +
+        graphHeight -
+        5
+      );
+
+
+    float x =
+      map(
+        i,
+        0,
+        BUFFER_SIZE - 1,
+
+        graphX,
+        graphX +
+        graphWidth
+      );
+
+
+    vertex(
+      x,
+      y
+    );
+  }
+
+
+  endShape();
+}
+
+
+// =====================================================
+// RAW AUTO SCALE
+// =====================================================
+
+void updateRawScale() {
+
+  float minValue = 4095;
+  float maxValue = 0;
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
+
+    float v =
+      rawData[i];
+
+
+    minValue =
+      min(
+        minValue,
+        v
+      );
+
+    maxValue =
+      max(
+        maxValue,
+        v
+      );
+  }
+
+
+  float range =
+    maxValue -
+    minValue;
+
+
+  if (range < 5) {
+    return;
+  }
+
+
+  float margin =
+    range * 0.20;
+
+
+  float targetMin =
+    constrain(
+      minValue -
+      margin,
+      0,
+      4095
+    );
+
+
+  float targetMax =
+    constrain(
+      maxValue +
+      margin,
+      0,
+      4095
+    );
+
+
+  rawMin =
+    lerp(
+      rawMin,
+      targetMin,
+      scaleSmooth
+    );
+
+
+  rawMax =
+    lerp(
+      rawMax,
+      targetMax,
+      scaleSmooth
+    );
+}
+
+
+// =====================================================
+// FILTERED AUTO SCALE
+// =====================================================
+
+void updateFilteredScale() {
+
+  float minValue =
+    999999;
+
+  float maxValue =
+    -999999;
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
+
+    float v =
+      filteredData[i];
+
+
+    minValue =
+      min(
+        minValue,
+        v
+      );
+
+    maxValue =
+      max(
+        maxValue,
+        v
+      );
+  }
+
+
+  float range =
+    maxValue -
+    minValue;
+
+
+  if (range < 5) {
+    return;
+  }
+
+
+  float margin =
+    range * 0.25;
+
+
+  float targetMin =
+    minValue -
+    margin;
+
+  float targetMax =
+    maxValue +
+    margin;
+
+
+  filteredMin =
+    lerp(
+      filteredMin,
+      targetMin,
+      scaleSmooth
+    );
+
+
+  filteredMax =
+    lerp(
+      filteredMax,
+      targetMax,
+      scaleSmooth
+    );
 }
 
 
@@ -205,7 +1151,9 @@ void updateGraphSize() {
 // SERIAL EVENT
 // =====================================================
 
-void serialEvent(Serial p) {
+void serialEvent(
+  Serial p
+) {
 
   String incoming =
     p.readStringUntil('\n');
@@ -221,71 +1169,142 @@ void serialEvent(Serial p) {
 
 
   // ===================================================
-  // RAW DATA
+  // LEADS OFF
   // ===================================================
 
-  if (incoming.startsWith(">raw:")) {
+  if (
+    incoming.startsWith(">off:")
+  ) {
 
-    String value =
-      incoming.substring(5);
-
-
-    try {
-
-      float raw =
-        float(value);
+    signalConnected = false;
 
 
-      rawData[dataIndex] =
-        raw;
+    if (signalRecording) {
 
-    }
-    catch (Exception e) {
+      accumulatedRecordingSeconds +=
+        (
+          millis() -
+          connectionStartMillis
+        )
+        /
+        1000.0;
+
+
+      signalRecording = false;
+
 
       println(
-        "RAW data error: " +
-        incoming
+        "ECG DISCONNECTED"
+      );
+
+      println(
+        "Recording timer PAUSED"
       );
     }
+
+
+    return;
   }
 
 
   // ===================================================
-  // FILTERED DATA
+  // RAW
   // ===================================================
 
-  else if (incoming.startsWith(">filtered:")) {
-
-    String value =
-      incoming.substring(10);
-
+  if (
+    incoming.startsWith(">raw:")
+  ) {
 
     try {
 
-      float filtered =
-        float(value);
+      float value =
+        float(
+          incoming.substring(5)
+        );
+
+
+      rawData[dataIndex] =
+        value;
+
+
+      signalConnected = true;
+
+    }
+    catch(Exception e) {
+
+      println(
+        "RAW error: " +
+        incoming
+      );
+    }
+
+
+    return;
+  }
+
+
+  // ===================================================
+  // FILTERED
+  // ===================================================
+
+  if (
+    incoming.startsWith(">filtered:")
+  ) {
+
+    try {
+
+      float value =
+        float(
+          incoming.substring(10)
+        );
 
 
       filteredData[dataIndex] =
-        filtered;
+        value;
 
 
-      // Advance index ONLY after
-      // receiving filtered value
+      // =================================================
+      // START TIMER ONLY WHEN SIGNAL ARRIVES
+      // =================================================
+
+      if (!signalRecording) {
+
+        signalRecording = true;
+
+        signalConnected = true;
+
+        connectionStartMillis =
+          millis();
+
+        firstSignalReceived = true;
+
+
+        println(
+          "ECG CONNECTED"
+        );
+
+        println(
+          "Recording timer STARTED"
+        );
+      }
+
 
       dataIndex++;
 
 
-      if (dataIndex >= bufferSize) {
+      if (
+        dataIndex >=
+        BUFFER_SIZE
+      ) {
 
         dataIndex = 0;
       }
 
     }
-    catch (Exception e) {
+    catch(Exception e) {
 
       println(
-        "Filtered data error: " +
+        "Filtered error: " +
         incoming
       );
     }
@@ -294,488 +1313,1127 @@ void serialEvent(Serial p) {
 
 
 // =====================================================
-// RAW AUTOMATIC SCALE
+// RECORDING TIMER
 // =====================================================
 
-void updateRawScale() {
+void updateRecordingTimer() {
 
-  float minValue = 999999;
+  if (signalRecording) {
 
-  float maxValue = -999999;
-
-
-  for (int i = 0; i < bufferSize; i++) {
-
-    float value =
-      rawData[i];
-
-
-    if (value < minValue) {
-      minValue = value;
-    }
+    float currentSessionSeconds =
+      (
+        millis() -
+        connectionStartMillis
+      )
+      /
+      1000.0;
 
 
-    if (value > maxValue) {
-      maxValue = value;
-    }
+    totalRecordingSeconds =
+      accumulatedRecordingSeconds +
+      currentSessionSeconds;
+
   }
+  else {
 
-
-  if (maxValue - minValue < 5) {
-    return;
+    totalRecordingSeconds =
+      accumulatedRecordingSeconds;
   }
-
-
-  float range =
-    maxValue - minValue;
-
-
-  float margin =
-    range * 0.20;
-
-
-  float targetMin =
-    minValue - margin;
-
-
-  float targetMax =
-    maxValue + margin;
-
-
-  targetMin =
-    constrain(
-      targetMin,
-      0,
-      4095
-    );
-
-
-  targetMax =
-    constrain(
-      targetMax,
-      0,
-      4095
-    );
-
-
-  rawDisplayMin =
-    lerp(
-      rawDisplayMin,
-      targetMin,
-      rawScaleSmooth
-    );
-
-
-  rawDisplayMax =
-    lerp(
-      rawDisplayMax,
-      targetMax,
-      rawScaleSmooth
-    );
 }
 
 
 // =====================================================
-// FILTERED AUTOMATIC SCALE
+// FORMAT TIME
 // =====================================================
 
-void updateFilteredScale() {
+String formatTime(
+  float seconds
+) {
 
-  float minValue = 999999;
-
-  float maxValue = -999999;
-
-
-  for (int i = 0; i < bufferSize; i++) {
-
-    float value =
-      filteredData[i];
+  int total =
+    int(seconds);
 
 
-    if (value < minValue) {
-      minValue = value;
-    }
+  int hours =
+    total /
+    3600;
 
 
-    if (value > maxValue) {
-      maxValue = value;
-    }
-  }
+  int minutes =
+    (
+      total %
+      3600
+    )
+    /
+    60;
 
 
-  if (maxValue - minValue < 5) {
-    return;
-  }
+  int secs =
+    total %
+    60;
 
 
-  float range =
-    maxValue - minValue;
-
-
-  float margin =
-    range * 0.25;
-
-
-  float targetMin =
-    minValue - margin;
-
-
-  float targetMax =
-    maxValue + margin;
-
-
-  filteredDisplayMin =
-    lerp(
-      filteredDisplayMin,
-      targetMin,
-      filteredScaleSmooth
-    );
-
-
-  filteredDisplayMax =
-    lerp(
-      filteredDisplayMax,
-      targetMax,
-      filteredScaleSmooth
-    );
+  return
+    nf(hours, 2)
+    +
+    ":"
+    +
+    nf(minutes, 2)
+    +
+    ":"
+    +
+    nf(secs, 2);
 }
 
 
 // =====================================================
-// RAW GRID
+// LEAD CONTROLS
 // =====================================================
 
-void drawRawGrid() {
+void drawControls() {
 
-  fill(10);
-
-  stroke(70);
-
-  strokeWeight(1);
-
-
-  rect(
-    graphX,
-    topGraphY,
-    graphWidth,
-    graphHeight
-  );
+  int y =
+    filteredGraphY +
+    graphHeight +
+    38;
 
 
-  // Vertical grid
+  textFont(boldFont);
 
-  stroke(35);
-
-  for (
-    int x = graphX;
-    x <= graphX + graphWidth;
-    x += 40
-  ) {
-
-    line(
-      x,
-      topGraphY,
-      x,
-      topGraphY + graphHeight
-    );
-  }
-
-
-  // Horizontal grid
-
-  for (
-    int y = topGraphY;
-    y <= topGraphY + graphHeight;
-    y += 30
-  ) {
-
-    line(
-      graphX,
-      y,
-      graphX + graphWidth,
-      y
-    );
-  }
-
-
-  // Border
-
-  stroke(90);
-
-  noFill();
-
-  rect(
-    graphX,
-    topGraphY,
-    graphWidth,
-    graphHeight
-  );
-
-
-  // Label
-
-  fill(220);
-
-  textSize(14);
+  fill(TEXT);
 
   text(
-    "RAW ECG",
-    graphX + 10,
-    topGraphY + 22
-  );
-}
-
-
-// =====================================================
-// FILTERED GRID
-// =====================================================
-
-void drawFilteredGrid() {
-
-  fill(10);
-
-  stroke(70);
-
-  strokeWeight(1);
-
-
-  rect(
+    "LEAD:",
     graphX,
-    bottomGraphY,
-    graphWidth,
-    graphHeight
+    y
   );
 
 
-  // Vertical grid
+  int buttonX =
+    graphX + 48;
 
-  stroke(35);
 
   for (
-    int x = graphX;
-    x <= graphX + graphWidth;
-    x += 40
+    int i = 0;
+    i < leads.length;
+    i++
   ) {
 
-    line(
-      x,
-      bottomGraphY,
-      x,
-      bottomGraphY + graphHeight
+    int bw = 65;
+
+
+    if (
+      i == selectedLead
+    ) {
+
+      fill(
+        BUTTON_ACTIVE
+      );
+
+    }
+    else {
+
+      fill(
+        BUTTON_COLOR
+      );
+    }
+
+
+    noStroke();
+
+
+    rect(
+      buttonX,
+      y - 16,
+      bw,
+      24,
+      4
     );
-  }
 
 
-  // Horizontal grid
+    textFont(smallFont);
 
-  for (
-    int y = bottomGraphY;
-    y <= bottomGraphY + graphHeight;
-    y += 30
-  ) {
+    fill(TEXT);
 
-    line(
-      graphX,
-      y,
-      graphX + graphWidth,
+    textAlign(
+      PConstants.CENTER
+    );
+
+
+    text(
+      leads[i],
+
+      buttonX +
+      bw / 2,
+
       y
     );
+
+
+    textAlign(
+      PConstants.LEFT
+    );
+
+
+    buttonX +=
+      bw + 5;
   }
 
 
-  // Border
+  // ===================================================
+  // RECORDING TIME
+  // ===================================================
 
-  stroke(90);
+  textFont(boldFont);
 
-  noFill();
-
-  rect(
-    graphX,
-    bottomGraphY,
-    graphWidth,
-    graphHeight
-  );
-
-
-  // Label
-
-  fill(220);
-
-  textSize(14);
+  fill(ACCENT);
 
   text(
-    "FILTERED ECG",
-    graphX + 10,
-    bottomGraphY + 22
+    "REC TIME: " +
+    formatTime(
+      totalRecordingSeconds
+    ),
+
+    width - 225,
+    y
   );
 }
 
 
 // =====================================================
-// RAW WAVEFORM
+// MEASUREMENT PANEL
 // =====================================================
 
-void drawRawWaveform() {
+void drawMeasurements() {
 
-  stroke(255, 180, 50);
-
-  strokeWeight(1.5);
-
-  noFill();
+  int panelY =
+    height - 85;
 
 
-  beginShape();
+  fill(PANEL);
+
+  noStroke();
 
 
-  for (int i = 0; i < bufferSize; i++) {
-
-    int index =
-      (dataIndex + i) % bufferSize;
-
-
-    float value =
-      rawData[index];
-
-
-    float y =
-      map(
-        value,
-        rawDisplayMin,
-        rawDisplayMax,
-        topGraphY + graphHeight - 8,
-        topGraphY + 8
-      );
+  rect(
+    25,
+    panelY,
+    width - 50,
+    68,
+    8
+  );
 
 
-    y =
-      constrain(
-        y,
-        topGraphY + 5,
-        topGraphY + graphHeight - 5
-      );
+  textFont(boldFont);
+
+  textSize(11);
+
+  fill(ACCENT);
+
+  text(
+    "ECG PARAMETERS",
+    42,
+    panelY + 18
+  );
 
 
-    float x =
-      map(
-        i,
-        0,
-        bufferSize - 1,
-        graphX,
-        graphX + graphWidth
-      );
+  drawParameter(
+    "BPM",
+    heartRate,
+    "bpm",
+    BPM_COLOR,
+    170,
+    panelY
+  );
 
 
-    vertex(x, y);
-  }
+  drawParameter(
+    "RR",
+    rrInterval,
+    "ms",
+    RR_COLOR,
+    315,
+    panelY
+  );
 
 
-  endShape();
+  drawParameter(
+    "PR",
+    prInterval,
+    "ms",
+    PR_COLOR,
+    455,
+    panelY
+  );
+
+
+  drawParameter(
+    "QRS",
+    qrsDuration,
+    "ms",
+    QRS_COLOR,
+    595,
+    panelY
+  );
+
+
+  drawParameter(
+    "QT",
+    qtInterval,
+    "ms",
+    QT_COLOR,
+    735,
+    panelY
+  );
+
+
+  drawParameter(
+    "QTc",
+    qtcInterval,
+    "ms",
+    QTC_COLOR,
+    875,
+    panelY
+  );
+
+
+  textFont(boldFont);
+
+  textSize(11);
+
+  fill(SUBTEXT);
+
+  text(
+    "CURRENT LEAD",
+    1010,
+    panelY + 19
+  );
+
+
+  textFont(boldFont);
+
+  textSize(18);
+
+  fill(ACCENT);
+
+  text(
+    leads[selectedLead],
+    1010,
+    panelY + 43
+  );
 }
 
 
 // =====================================================
-// FILTERED WAVEFORM
+// PARAMETER
 // =====================================================
 
-void drawFilteredWaveform() {
+void drawParameter(
+  String label,
+  float value,
+  String unit,
+  int c,
+  int x,
+  int y
+) {
 
-  stroke(0, 255, 120);
-
-  strokeWeight(2.0);
-
-  noFill();
-
-
-  beginShape();
-
-
-  for (int i = 0; i < bufferSize; i++) {
-
-    int index =
-      (dataIndex + i) % bufferSize;
-
-
-    float value =
-      filteredData[index];
-
-
-    float y =
-      map(
-        value,
-        filteredDisplayMin,
-        filteredDisplayMax,
-        bottomGraphY + graphHeight - 8,
-        bottomGraphY + 8
-      );
-
-
-    y =
-      constrain(
-        y,
-        bottomGraphY + 5,
-        bottomGraphY + graphHeight - 5
-      );
-
-
-    float x =
-      map(
-        i,
-        0,
-        bufferSize - 1,
-        graphX,
-        graphX + graphWidth
-      );
-
-
-    vertex(x, y);
-  }
-
-
-  endShape();
-}
-
-
-// =====================================================
-// INFORMATION
-// =====================================================
-
-void drawInformation() {
-
-  int infoY =
-    bottomGraphY + graphHeight + 28;
-
-
-  fill(160);
+  textFont(boldFont);
 
   textSize(12);
 
+  fill(c);
 
   text(
-    "Time: " +
-    nf(bufferSize / 250.0, 1, 1) +
-    " sec",
-    graphX,
-    infoY
+    label,
+    x,
+    y + 19
   );
 
 
+  textFont(boldFont);
+
+  textSize(20);
+
+
+  if (value > 0) {
+
+    fill(TEXT);
+
+    text(
+      nf(
+        value,
+        1,
+        0
+      ),
+      x,
+      y + 43
+    );
+
+  }
+  else {
+
+    fill(SUBTEXT);
+
+    text(
+      "--",
+      x,
+      y + 43
+    );
+  }
+
+
+  textFont(boldFont);
+
+  textSize(10);
+
+  fill(c);
+
   text(
-    "Sampling: 250 Hz",
-    graphX + 160,
-    infoY
+    unit,
+    x + 42,
+    y + 43
   );
+}
 
 
-  text(
-    "RAW = ADC",
-    graphX + 330,
-    infoY
+// =====================================================
+// ECG MEASUREMENTS
+// =====================================================
+
+void updateECGMeasurements() {
+
+  measurementCounter++;
+
+
+  if (
+    measurementCounter < 15
+  ) {
+    return;
+  }
+
+
+  measurementCounter = 0;
+
+
+  ArrayList<Integer> peaks =
+    detectRPeaks();
+
+
+  if (
+    peaks.size() < 2
+  ) {
+    return;
+  }
+
+
+  int r2 =
+    peaks.get(
+      peaks.size() - 1
+    );
+
+
+  int r1 =
+    peaks.get(
+      peaks.size() - 2
+    );
+
+
+  rrInterval =
+    (
+      r2 - r1
+    )
+    *
+    (
+      1000.0 /
+      SAMPLE_RATE
+    );
+
+
+  if (
+    rrInterval > 300 &&
+    rrInterval < 2000
+  ) {
+
+    heartRate =
+      60000.0 /
+      rrInterval;
+  }
+
+
+  calculateIntervals(
+    r2
   );
+}
 
 
-  text(
-    "FILTERED = LP + 50 Hz Notch",
-    graphX + 470,
-    infoY
-  );
+// =====================================================
+// R PEAK DETECTION
+// =====================================================
+
+ArrayList<Integer>
+detectRPeaks() {
+
+  ArrayList<Integer> peaks =
+    new ArrayList<Integer>();
+
+
+  float minValue =
+    999999;
+
+  float maxValue =
+    -999999;
+
+
+  for (
+    int i = 0;
+    i < BUFFER_SIZE;
+    i++
+  ) {
+
+    float v =
+      getValue(i);
+
+
+    minValue =
+      min(
+        minValue,
+        v
+      );
+
+    maxValue =
+      max(
+        maxValue,
+        v
+      );
+  }
+
+
+  float range =
+    maxValue -
+    minValue;
+
+
+  if (
+    range < 10
+  ) {
+    return peaks;
+  }
+
+
+  float threshold =
+    minValue +
+    range *
+    0.65;
+
+
+  int minimumDistance =
+    int(
+      SAMPLE_RATE *
+      0.25
+    );
+
+
+  int lastPeak =
+    -minimumDistance;
+
+
+  for (
+    int i = 2;
+    i <
+      BUFFER_SIZE - 2;
+    i++
+  ) {
+
+    float current =
+      getValue(i);
+
+    float left =
+      getValue(i - 1);
+
+    float right =
+      getValue(i + 1);
+
+
+    if (
+      current >
+      threshold &&
+
+      current >
+      left &&
+
+      current >=
+      right
+    ) {
+
+      if (
+        i -
+        lastPeak >=
+        minimumDistance
+      ) {
+
+        peaks.add(i);
+
+        lastPeak = i;
+      }
+    }
+  }
+
+
+  return peaks;
+}
+
+
+// =====================================================
+// INTERVAL CALCULATIONS
+// =====================================================
+
+void calculateIntervals(
+  int rPeak
+) {
+
+  int qrsOnset =
+    findQRSOnset(
+      rPeak
+    );
+
+
+  int qrsEnd =
+    findQRSEnd(
+      rPeak
+    );
+
+
+  if (
+    qrsOnset < 0 ||
+    qrsEnd < 0
+  ) {
+    return;
+  }
+
+
+  qrsDuration =
+    (
+      qrsEnd -
+      qrsOnset
+    )
+    *
+    (
+      1000.0 /
+      SAMPLE_RATE
+    );
+
+
+  int pOnset =
+    findPOnset(
+      qrsOnset
+    );
+
+
+  if (
+    pOnset >= 0
+  ) {
+
+    prInterval =
+      (
+        qrsOnset -
+        pOnset
+      )
+      *
+      (
+        1000.0 /
+        SAMPLE_RATE
+      );
+  }
+
+
+  int tEnd =
+    findTEnd(
+      qrsEnd,
+      rPeak
+    );
+
+
+  if (
+    tEnd >= 0
+  ) {
+
+    qtInterval =
+      (
+        tEnd -
+        qrsOnset
+      )
+      *
+      (
+        1000.0 /
+        SAMPLE_RATE
+      );
+
+
+    float rrSeconds =
+      rrInterval /
+      1000.0;
+
+
+    if (
+      rrSeconds > 0
+    ) {
+
+      qtcInterval =
+        (
+          qtInterval /
+          1000.0
+        )
+        /
+        sqrt(
+          rrSeconds
+        )
+        *
+        1000.0;
+    }
+  }
+
+
+  measurementsReady = true;
+}
+
+
+// =====================================================
+// QRS ONSET
+// =====================================================
+
+int findQRSOnset(
+  int rPeak
+) {
+
+  int start =
+    max(
+      5,
+      rPeak - 25
+    );
+
+
+  float peak =
+    abs(
+      getValue(
+        rPeak
+      )
+    );
+
+
+  float threshold =
+    peak *
+    0.15;
+
+
+  for (
+    int i =
+      rPeak - 1;
+
+    i >= start;
+
+    i--
+  ) {
+
+    if (
+      abs(
+        getValue(i)
+      )
+      <
+      threshold
+    ) {
+
+      return i;
+    }
+  }
+
+
+  return
+    rPeak - 15;
+}
+
+
+// =====================================================
+// QRS END
+// =====================================================
+
+int findQRSEnd(
+  int rPeak
+) {
+
+  int end =
+    min(
+      BUFFER_SIZE - 5,
+      rPeak + 30
+    );
+
+
+  float peak =
+    abs(
+      getValue(
+        rPeak
+      )
+    );
+
+
+  float threshold =
+    peak *
+    0.15;
+
+
+  for (
+    int i =
+      rPeak + 1;
+
+    i <= end;
+
+    i++
+  ) {
+
+    if (
+      abs(
+        getValue(i)
+      )
+      <
+      threshold
+    ) {
+
+      return i;
+    }
+  }
+
+
+  return
+    rPeak + 20;
+}
+
+
+// =====================================================
+// P PEAK
+// =====================================================
+
+int findPPeak(
+  int qrsOnset
+) {
+
+  int start =
+    max(
+      5,
+      qrsOnset - 60
+    );
+
+
+  int end =
+    max(
+      start + 1,
+      qrsOnset - 20
+    );
+
+
+  float best =
+    -999999;
+
+
+  int index =
+    -1;
+
+
+  for (
+    int i = start;
+    i <= end;
+    i++
+  ) {
+
+    float v =
+      abs(
+        getValue(i)
+      );
+
+
+    if (
+      v > best
+    ) {
+
+      best = v;
+
+      index = i;
+    }
+  }
+
+
+  return index;
+}
+
+
+// =====================================================
+// P ONSET
+// =====================================================
+
+int findPOnset(
+  int qrsOnset
+) {
+
+  int pPeak =
+    findPPeak(
+      qrsOnset
+    );
+
+
+  if (
+    pPeak < 0
+  ) {
+    return -1;
+  }
+
+
+  float peak =
+    abs(
+      getValue(
+        pPeak
+      )
+    );
+
+
+  float threshold =
+    peak *
+    0.10;
+
+
+  for (
+    int i =
+      pPeak - 1;
+
+    i >=
+      max(
+        0,
+        pPeak - 30
+      );
+
+    i--
+  ) {
+
+    if (
+      abs(
+        getValue(i)
+      )
+      <
+      threshold
+    ) {
+
+      return i;
+    }
+  }
+
+
+  return
+    pPeak - 20;
+}
+
+
+// =====================================================
+// T END
+// =====================================================
+
+int findTEnd(
+  int qrsEnd,
+  int rPeak
+) {
+
+  int start =
+    qrsEnd + 15;
+
+
+  int end =
+    min(
+      BUFFER_SIZE - 5,
+      rPeak + 125
+    );
+
+
+  float maxT =
+    -999999;
+
+
+  int tPeak =
+    -1;
+
+
+  for (
+    int i = start;
+    i <= end;
+    i++
+  ) {
+
+    float v =
+      abs(
+        getValue(i)
+      );
+
+
+    if (
+      v > maxT
+    ) {
+
+      maxT = v;
+
+      tPeak = i;
+    }
+  }
+
+
+  if (
+    tPeak < 0
+  ) {
+    return -1;
+  }
+
+
+  float threshold =
+    maxT *
+    0.10;
+
+
+  for (
+    int i =
+      tPeak + 1;
+
+    i <=
+      min(
+        end,
+        tPeak + 50
+      );
+
+    i++
+  ) {
+
+    if (
+      abs(
+        getValue(i)
+      )
+      <
+      threshold
+    ) {
+
+      return i;
+    }
+  }
+
+
+  return
+    tPeak + 30;
+}
+
+
+// =====================================================
+// GET FILTERED VALUE
+// =====================================================
+
+float getValue(
+  int position
+) {
+
+  int index =
+    (
+      dataIndex +
+      position
+    )
+    %
+    BUFFER_SIZE;
+
+
+  return
+    filteredData[index];
+}
+
+
+// =====================================================
+// MOUSE - LEAD SELECTION
+// =====================================================
+
+void mousePressed() {
+
+  int y =
+    filteredGraphY +
+    graphHeight +
+    38;
+
+
+  int buttonX =
+    graphX + 48;
+
+
+  for (
+    int i = 0;
+    i < leads.length;
+    i++
+  ) {
+
+    int bw = 65;
+
+
+    if (
+      mouseX >= buttonX &&
+
+      mouseX <=
+      buttonX + bw &&
+
+      mouseY >=
+      y - 16 &&
+
+      mouseY <=
+      y + 8
+    ) {
+
+      selectedLead =
+        i;
+
+
+      println(
+        "Selected Lead: " +
+        leads[i]
+      );
+
+
+      break;
+    }
+
+
+    buttonX +=
+      bw + 5;
+  }
+}
+
+
+// =====================================================
+// KEYBOARD
+// =====================================================
+
+void keyPressed() {
+
+  // ===================================================
+  // R = RESET RECORDING TIME
+  // ===================================================
+
+  if (
+    key == 'r' ||
+    key == 'R'
+  ) {
+
+    accumulatedRecordingSeconds = 0;
+
+    totalRecordingSeconds = 0;
+
+
+    if (
+      signalRecording
+    ) {
+
+      connectionStartMillis =
+        millis();
+    }
+
+
+    println(
+      "Recording timer RESET"
+    );
+  }
 }
