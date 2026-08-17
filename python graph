@@ -1,0 +1,206 @@
+import csv
+import os
+import sys
+import time
+import matplotlib
+
+matplotlib.use("TkAgg")  # GUI Window Backend
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import serial
+
+# =====================================================
+# CONFIGURATION
+# =====================================================
+PORT_NAME = "COM8"  # Apna COM Port check kar lein
+BAUD_RATE = 115200
+SAMPLE_RATE = 250.0  # Hz
+RECORD_DURATION = 30  # Seconds per lead
+
+LEAD1_FILE = "lead1_data.csv"
+LEAD2_FILE = "lead2_data.csv"
+COMBINED_FILE = "all_derived_leads.csv"
+
+# =====================================================
+# 1. DATA COLLECTION FUNCTION
+# =====================================================
+
+
+def record_lead(lead_name, filename, duration_sec):
+    print(
+        f"\n=================================================================="
+    )
+    print(f" READY TO RECORD: {lead_name}")
+    print(
+        f" Please attach electrodes for {lead_name} and press ENTER to start."
+    )
+    print(
+        f"=================================================================="
+    )
+    input()
+
+    print(f"[INFO] Connecting to {PORT_NAME}...")
+    try:
+        ser = serial.Serial(PORT_NAME, BAUD_RATE, timeout=1)
+        ser.flushInput()
+        time.sleep(1.5)
+        print(
+            f"[SUCCESS] Connected! Recording {lead_name} for {duration_sec} seconds..."
+        )
+    except Exception as e:
+        print(f"[ERROR] Could not open port {PORT_NAME}: {e}")
+        print("Make sure Serial Monitor / Arduino IDE is CLOSED.")
+        sys.exit(1)
+
+    total_samples = int(SAMPLE_RATE * duration_sec)
+    sample_count = 0
+
+    with open(filename, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["Sample", "Raw", "Filtered"])
+
+        start_time = time.time()
+        while sample_count < total_samples:
+            if ser.in_waiting > 0:
+                try:
+                    line = (
+                        ser.readline().decode("utf-8", errors="ignore").strip()
+                    )
+                    if not line:
+                        continue
+
+                    raw_val, filt_val = 0.0, 0.0
+
+                    if "," in line:
+                        parts = line.replace(">", "").split(",")
+                        raw_val = float(parts[0])
+                        filt_val = (
+                            float(parts[1])
+                            if len(parts) > 1
+                            else float(parts[0])
+                        )
+                    else:
+                        clean_val = (
+                            line.replace(">", "")
+                            .replace("raw:", "")
+                            .replace("filtered:", "")
+                        )
+                        raw_val = float(clean_val)
+                        filt_val = raw_val
+
+                    writer.writerow([sample_count, raw_val, filt_val])
+                    file.flush()
+                    sample_count += 1
+
+                    if sample_count % 250 == 0:
+                        elapsed = int(time.time() - start_time)
+                        print(
+                            f"[{lead_name}] Recorded: {sample_count}/{total_samples} samples ({elapsed}/{duration_sec}s)"
+                        )
+
+                except ValueError:
+                    continue
+
+    ser.close()
+    print(f"[COMPLETE] {lead_name} saved to '{filename}' successfully!\n")
+
+
+# =====================================================
+# 2. PROCESSING & PLOTTING FUNCTION
+# =====================================================
+
+
+def process_and_plot():
+    print("\n[INFO] Processing recorded CSV files...")
+
+    df_l1 = pd.read_csv(LEAD1_FILE)
+    df_l2 = pd.read_csv(LEAD2_FILE)
+
+    df_l1.columns = df_l1.columns.str.strip()
+    df_l2.columns = df_l2.columns.str.strip()
+
+    col1 = "Filtered" if "Filtered" in df_l1.columns else df_l1.columns[-1]
+    col2 = "Filtered" if "Filtered" in df_l2.columns else df_l2.columns[-1]
+
+    l1_data = pd.to_numeric(df_l1[col1], errors="coerce").fillna(0).values
+    l2_data = pd.to_numeric(df_l2[col2], errors="coerce").fillna(0).values
+
+    min_len = min(len(l1_data), len(l2_data))
+    if min_len == 0:
+        print("[ERROR] Recorded CSV files are empty!")
+        return
+
+    l1_filt = l1_data[:min_len]
+    l2_filt = l2_data[:min_len]
+
+    # Einthoven & Goldberger Equations
+    l3_filt = l2_filt - l1_filt
+    avr_filt = -(l1_filt + l2_filt) / 2.0
+    avl_filt = l1_filt - (l2_filt / 2.0)
+    avf_filt = l2_filt - (l1_filt / 2.0)
+
+    time_axis = np.arange(min_len) / SAMPLE_RATE
+
+    # Combined CSV Write
+    df_combined = pd.DataFrame({
+        "Sample": np.arange(min_len),
+        "Time_sec": time_axis,
+        "Lead_I": l1_filt,
+        "Lead_II": l2_filt,
+        "Lead_III": l3_filt,
+        "aVR": avr_filt,
+        "aVL": avl_filt,
+        "aVF": avf_filt,
+    })
+    df_combined.to_csv(COMBINED_FILE, index=False)
+    print(f"[SUCCESS] Combined 6-lead dataset saved to '{COMBINED_FILE}'")
+
+    # Plotting
+    print("[INFO] Rendering 6-Lead ECG Graph Window...")
+    plt.style.use("dark_background")
+    fig, axes = plt.subplots(3, 2, figsize=(14, 8), sharex=True)
+    fig.canvas.manager.set_window_title("Complete 6-Limb Lead ECG")
+
+    plots = [
+        (axes[0, 0], l1_filt, "Lead I (Recorded)", "#00FFCC"),
+        (axes[1, 0], l2_filt, "Lead II (Recorded)", "#00FF00"),
+        (axes[2, 0], l3_filt, "Lead III (Calculated)", "#FFFF00"),
+        (axes[0, 1], avr_filt, "aVR (Calculated)", "#FF0055"),
+        (axes[1, 1], avl_filt, "aVL (Calculated)", "#FF00FF"),
+        (axes[2, 1], avf_filt, "aVF (Calculated)", "#00CCFF"),
+    ]
+
+    for ax, data, title, color in plots:
+        ax.plot(time_axis, data, color=color, linewidth=1.2)
+        ax.set_title(title, loc="left", fontsize=10, fontweight="bold")
+        ax.grid(
+            True, which="both", color="#334455", linestyle="--", linewidth=0.5
+        )
+
+        d_min, d_max = np.min(data), np.max(data)
+        if d_min == d_max:
+            ax.set_ylim(-10, 10)
+        else:
+            margin = max((d_max - d_min) * 0.1, 10)
+            ax.set_ylim(d_min - margin, d_max + margin)
+
+    axes[2, 0].set_xlabel("Time (seconds)")
+    axes[2, 1].set_xlabel("Time (seconds)")
+
+    plt.tight_layout()
+    plt.show(block=True)
+
+
+# =====================================================
+# MAIN EXECUTION
+# =====================================================
+if __name__ == "__main__":
+    # Step 1: Record Lead 1
+    record_lead("Lead I", LEAD1_FILE, RECORD_DURATION)
+
+    # Step 2: Record Lead 2
+    record_lead("Lead II", LEAD2_FILE, RECORD_DURATION)
+
+    # Step 3: Automatically Calculate Derived Leads and Plot
+    process_and_plot()
